@@ -19,6 +19,8 @@ class Hi_Attention(nn.Module):
         self.max_sent = config.max_sent
         self.max_word = config.max_word
 
+        self.triplet = config.triplet  # 是否使用triplet loss
+
         self.w_num_layer = config.w_num_layer
         self.w_hidden_size = config.w_hidden_size
         self.w_atten_size = config.w_atten_size
@@ -106,8 +108,27 @@ class Hi_Attention(nn.Module):
         dim = x.size(1)
         x = x.view(-1, self.max_sent, dim)
         x = self.sent_atten(x, sent_mask)
-        x = self.linear(x)
+        # if self.triplet:
+        #     return x  # 直接返回embedding的结果
+        # else:
+        #     x = self.linear(x)
         return x
+
+
+class ClassificationNet(nn.Module):
+    def __init__(self, config):
+        super(ClassificationNet, self).__init__()
+        if config.s_is_bidirectional:
+            self.s_num_directions = 2
+        else:
+            self.s_num_directions = 1
+        self.in_size = config.s_hidden_size * self.s_num_directions
+        self.num_class = config.num_class
+        self.linear = nn.Linear(self.in_size, self.num_class)
+
+    def forward(self, x):
+        output = self.linear(x)
+        return output
 
 
 # if __name__ == "__main__":

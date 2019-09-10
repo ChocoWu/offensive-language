@@ -55,8 +55,8 @@ class OnlineTripletLoss(nn.Module):
 
     def forward(self, embeddings, target):
         triplets = self.triplet_selector.get_triplets(embeddings, target)
-        if embeddings.is_cuda():
-            triplets = triplets.cuda()
+        # if embeddings.is_cuda():
+        #     triplets = triplets.cuda()
 
 
         ap_distances = (embeddings[triplets[:, 0]] - embeddings[triplets[:, 1]]).pow(2).sum(1)

@@ -17,8 +17,11 @@ import torch.optim as optim
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from model.model import Hi_Attention
+from model.model import ClassificationNet
 from tqdm import tqdm
 from utils import *
+from losses import OnlineTripletLoss
+from selector import *
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
@@ -70,25 +73,32 @@ class Trainer(object):
     def __init__(self, config, w_embedding, c_embedding=None):
         self.config = config
         self.model = Hi_Attention(self.config, w_embedding, c_embedding)
+        self.classification_net = ClassificationNet(self.config)
+        self.triplet_selector = HardestNegativeTripletSelector(self.config.margin)
+        self.online_triplet_loss = OnlineTripletLoss(self.config.margin, self.triplet_selector)
 
         self.optim = optim.Adam(self.model.parameters(), lr = config.lr, weight_decay = config.weight_decay)
         self.criterion = nn.CrossEntropyLoss()
 
         if config.use_gpu:
             self.model = self.model.cuda()
+            self.classification_net = self.classification_net.cuda()
+            # self.triplet_selector = self.triplet_selector.cuda()
 
     def __call__(self, train_dataset, valid_dataset, fb_test_dataset, tw_test_dataset):
         best_f1 = 0.
         best_fb_test_f1 = 0.
         best_tw_test_f1 = 0.
         patience = 0
+        loss_arr = []
         for epoch in range(self.config.epochs):
             if self.config.pretrain_embedding:
                 if epoch < self.config.freeze:
                     self.model.embedding.weight.requires_grad = False
                 else:
                     self.model.embedding.weight.requires_grad = True
-            loss, during_time = self.train(train_dataset)
+            loss, during_time, loss_array = self.train(train_dataset)
+            loss_arr.extend(loss_array)
             logger.info("Epoch: {} Loss: {:.4f} Time: {}".format(epoch, loss, int(during_time)))
 
             weighted_f1, macro_f1, p, r, acc, during_time, _, _ = self.eval(valid_dataset)
@@ -117,6 +127,14 @@ class Trainer(object):
         logger.info("Best Valid_F1: {:.4f}, Best Facebook Test_F1: {:.4f}, Best Twitter Test_F1: {:.4f}".format(best_f1,
                                                                                                                 best_fb_test_f1,
                                                                                                                 best_tw_test_f1))
+        visiual_loss(loss_arr, './image/{}_loss.jpg'.format(time.strftime("%m-%d_%H-%M-%S")))
+
+        # 查看其embedding的变化，看是否难以进行分类
+        train_embeddings, train_labels = extract_embeddings(train_dataset, self.model, self.config)
+        plot_embeddings(train_embeddings, train_labels, './image/{}_train_embedding.jpg'.format(time.strftime("%m-%d_%H-%M-%S")))
+        valid_embedding, valid_labels = extract_embeddings(valid_dataset, self.model, self.config)
+        plot_embeddings(valid_embedding, valid_labels, './image/{}_valid_embedding.jpg'.format(time.strftime("%m-%d_%H-%M-%S")))
+
 
     def train(self, dataset):
         start_time = time.time()
@@ -134,8 +152,18 @@ class Trainer(object):
                     word_mask = mask.reshape(-1, mask.size(2))
                     sent_mask = mask.sum(2).ne(0).byte()
                     output = self.model(w_inputs, word_mask, sent_mask, c_inputs)
-                    loss = self.criterion(output, labels)
-                    loss = torch.mean(loss)
+                    if self.config.triplet:
+                        triplet_loss, triplet_len = self.online_triplet_loss(output, labels)
+                        output = self.classification_net(output)
+                        loss = self.criterion(output, labels)
+                        # print(loss.size())
+                        loss = torch.mean(loss) + triplet_loss
+                        loss = torch.mean(loss)
+                        pass
+                    else:
+                        output = self.classification_net(output)
+                        loss = self.criterion(output, labels)
+                        loss = torch.mean(loss)
 
                     self.optim.zero_grad()
                     loss.backward()
@@ -153,9 +181,17 @@ class Trainer(object):
                 sent_mask = mask.sum(2).ne(0).byte()
 
                 output = self.model(inputs, word_mask, sent_mask)
-                # result = torch.max(output, 1)[1]
-                loss = self.criterion(output, labels)
-                loss = torch.mean(loss)
+                if self.config.triplet:
+                    triplet_loss, triplet_len = self.online_triplet_loss(output, labels)
+                    output = self.classification_net(output)
+                    loss = self.criterion(output, labels)
+                    loss = torch.mean(loss) + triplet_loss
+                    loss = torch.mean(loss)
+                    pass
+                else:
+                    output = self.classification_net(output)
+                    loss = self.criterion(output, labels)
+                    loss = torch.mean(loss)
 
                 self.optim.zero_grad()
                 loss.backward()
@@ -164,7 +200,7 @@ class Trainer(object):
                 loss_array.append(loss.cpu().item())
 
         during_time = time.time() - start_time
-        return np.mean(loss_array), during_time
+        return np.mean(loss_array), during_time, loss_array
 
     def eval(self, dataset):
         start_time = time.time()
@@ -184,6 +220,8 @@ class Trainer(object):
                     word_mask = mask.view(-1, mask.size(2))
                     sent_mask = mask.sum(2).ne(0).byte()
                     output = self.model(inputs, word_mask, sent_mask, c_inputs)
+                    # if self.config.triplet:
+                    output = self.classification_net(output)
                     result = torch.max(output, 1)[1]
                     pred_labels.extend(result.cpu().numpy().tolist())
                     gold_labels.extend(labels.cpu().numpy().tolist())
@@ -196,6 +234,8 @@ class Trainer(object):
                     word_mask = mask.view(-1, mask.size(2))
                     sent_mask = mask.sum(2).ne(0).byte()
                     output = self.model(inputs, word_mask, sent_mask)
+                    # if self.config.triplet:
+                    output = self.classification_net(output)
                     result = torch.max(output, 1)[1]
                     pred_labels.extend(result.cpu().numpy().tolist())
                     gold_labels.extend(labels.cpu().numpy().tolist())
@@ -231,17 +271,20 @@ if __name__ == '__main__':
     parser.add_argument("--embedding_file", type = str, default = "./data/glove.840B.300d.txt")
 
     parser.add_argument("--seed", type = int, default = 123, help = "seed for random")
-    parser.add_argument("--batch_size", type = int, default = 150, help = "number of batch size")
+    parser.add_argument("--batch_size", type = int, default = 140, help = "number of batch size")
     parser.add_argument("--epochs", type = int, default = 100, help = "number of epochs")
     parser.add_argument("--embedding_size", type = int, default = 300)
-    parser.add_argument("--lr", type = float, default = 0.004, help = "learning rate of adam")
+    parser.add_argument("--lr", type = float, default = 0.003, help = "learning rate of adam")
     parser.add_argument("--weight_decay", type = float, default = 1e-5, help = "weight decay of adam")
-    parser.add_argument("--patience", type = int, default = 10)
+    parser.add_argument("--patience", type = int, default = 15)
     parser.add_argument("--freeze", type = int, default = 5)
     parser.add_argument("--num_class", type = int, default = 3)
     parser.add_argument("--dropout_prob", type = float, default = 0.5)
     parser.add_argument("--max_sent", type = int, default = 6)
     parser.add_argument("--max_word", type = int, default = 35)
+
+    parser.add_argument("--triplet", type = bool, default = False)
+    parser.add_argument("--margin", type = float, default = 1.0)
 
     parser.add_argument("--w_hidden_size", type = int, default = 150)
     parser.add_argument("--w_num_layer", type = int, default = 1, help = "number of layers")
