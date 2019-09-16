@@ -75,7 +75,7 @@ class LSTM(nn.Module):
 
         new_hidden_state = torch.bmm(lstm_output.transpose(1, 2), weights.unsqueeze(2)).squeeze(2)
 
-        return new_hidden_state
+        return new_hidden_state, weights
 
     def forward(self, x, mask):
         """
@@ -96,8 +96,8 @@ class LSTM(nn.Module):
         #
         # _, idx = idx.sort(0, descending=False)
         # lstm_output = lstm_output[idx]
-        output = self.attention_net(lstm_output, h_n, mask)
-        return output
+        output, weights = self.attention_net(lstm_output, h_n, mask)
+        return output, weights
 
 
 # if __name__ == '__main__':

@@ -4,6 +4,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from .layer import LSTM
 from .char_encoder import CharEncoderCNN, CharEncoderLSTM
 import argparse
@@ -81,7 +82,7 @@ class Hi_Attention(nn.Module):
                                self.s_dropout_prob, self.s_is_bidirectional, self.s_atten_size)
 
         self.dropout = nn.Dropout(self.dropout_prob)
-        self.linear = nn.Linear(self.s_hidden_size * self.s_num_directions, self.num_class)
+        self.linear = nn.Linear(self.s_hidden_size * self.s_num_directions, 2)
 
     def forward(self, x_word, word_mask, sent_mask, x_char=None):
         """
@@ -104,15 +105,18 @@ class Hi_Attention(nn.Module):
             # print(x.size())  # 4, 6, 35
             x = self.embedding(x_word)
             x = x.view(-1, self.max_word, self.embedding_size)
-        x = self.word_atten(x, word_mask)
+        x, word_weights = self.word_atten(x, word_mask)
+        # x = F.layer_norm(x, x.size()[1:])
         dim = x.size(1)
         x = x.view(-1, self.max_sent, dim)
-        x = self.sent_atten(x, sent_mask)
+        x, sent_weights = self.sent_atten(x, sent_mask)
+        # x = F.layer_norm(x, x.size()[1:])
+        x = self.linear(x)  # 150 * 2
         # if self.triplet:
         #     return x  # 直接返回embedding的结果
         # else:
         #     x = self.linear(x)
-        return x
+        return x, word_weights, sent_weights
 
 
 class ClassificationNet(nn.Module):
@@ -122,7 +126,8 @@ class ClassificationNet(nn.Module):
             self.s_num_directions = 2
         else:
             self.s_num_directions = 1
-        self.in_size = config.s_hidden_size * self.s_num_directions
+        # self.in_size = config.s_hidden_size * self.s_num_directions
+        self.in_size = 2
         self.num_class = config.num_class
         self.linear = nn.Linear(self.in_size, self.num_class)
 
