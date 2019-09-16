@@ -8,6 +8,9 @@ import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.metrics import confusion_matrix
+import seaborn
+import pandas as pd
 
 
 def save_model(model, model_path):
@@ -61,12 +64,21 @@ def load_from_pickle(path):
     return obj
 
 
-classes = ['CAG', 'NAG', 'OAG']
+# classes = ['NAG', 'CAG', 'OAG']
 colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
           '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
 
 
-def plot_embeddings(embeddings, targets, save_name, xlim=None, ylim=None):
+def decode_label(label):
+    if label == '3':
+        return 'OAG'
+    elif label == '2':
+        return 'CAG'
+    else:
+        return 'NAG'
+
+
+def plot_embeddings(embeddings, targets, save_name, config, xlim=None, ylim=None):
     plt.figure(figsize=(10, 10))
     for i in range(3):
         inds = np.where(targets == i)[0]
@@ -75,7 +87,7 @@ def plot_embeddings(embeddings, targets, save_name, xlim=None, ylim=None):
         plt.xlim(xlim[0], xlim[1])
     if ylim:
         plt.ylim(ylim[0], ylim[1])
-    plt.legend(classes)
+    plt.legend([decode_label(config.id2tag[0]), decode_label(config.id2tag[1]), decode_label(config.id2tag[2])])
     plt.savefig(save_name)
 
 
@@ -95,7 +107,7 @@ def extract_embeddings(dataloader, model, config):
                         mask = w_inputs.ne(0).byte()
                         word_mask = mask.reshape(-1, mask.size(2))
                         sent_mask = mask.sum(2).ne(0).byte()
-                        embeddings[k:k + len(w_inputs)] = model(w_inputs, word_mask, sent_mask, c_inputs).cpu().numpy()
+                        embeddings[k:k + len(w_inputs)] = model(w_inputs, word_mask, sent_mask, c_inputs)[0].cpu().numpy()
                         labels[k:k + len(w_inputs)] = target.numpy()
                         k += len(w_inputs)
             else:
@@ -106,7 +118,7 @@ def extract_embeddings(dataloader, model, config):
                     mask = inputs.ne(0).byte()
                     word_mask = mask.view(-1, mask.size(2))
                     sent_mask = mask.sum(2).ne(0).byte()
-                    embeddings[k:k + len(inputs)] = model(inputs, word_mask, sent_mask).cpu().numpy()
+                    embeddings[k:k + len(inputs)] = model(inputs, word_mask, sent_mask)[0].cpu().numpy()
                     labels[k:k + len(inputs)] = target.numpy()
                     k += len(inputs)
 
@@ -119,10 +131,40 @@ def extract_embeddings(dataloader, model, config):
 # plot_embeddings(val_embeddings_baseline, val_labels_baseline)
 
 
-def visiual_loss(loss, save_name):
+def visual_loss(loss, save_name):
     plt.figure()
     x = [i for i in range(len(loss))]
     plt.plot(x, loss, label="$loss$", color='red', linewidth=2)
     plt.legend()
     plt.savefig(save_name)
     # plt.show()
+
+
+def visual_f1(dev_acc, test_acc, fb_acc, tw_acc, save_name):
+    plt.figure()
+    assert len(dev_acc) == len(test_acc) and len(test_acc) == len(fb_acc) and len(fb_acc) == len(tw_acc)
+    x = [i for i in range(len(dev_acc))]
+    plt.plot(x, dev_acc, label = "dev_acc", color = colors[0], linewidth = 2)
+    plt.plot(x, test_acc, label = "test_acc", color = colors[1], linewidth = 2)
+    plt.plot(x, fb_acc, label = "fb_acc", color = colors[2], linewidth = 2)
+    plt.plot(x, tw_acc, label = 'tw_acc', color = colors[3], linewidth = 2)
+
+    plt.legend()
+    plt.savefig(save_name)
+
+
+def visual_confusion_matrix(predict, target, config, save_name):
+    confusion_m = confusion_matrix(target, predict)
+    matrix_proportions = np.zeros((3, 3))
+    for i in range(0, 3):
+        matrix_proportions[i, :] = confusion_m[i, :] / float(confusion_m[i, :].sum())
+    names = [[decode_label(config.id2tag[0]), decode_label(config.id2tag[1]), decode_label(config.id2tag[2])]]
+    confusion_df = pd.DataFrame(matrix_proportions, index = names, columns = names)
+    plt.figure(figsize = (5, 5))
+    seaborn.heatmap(confusion_df, annot = True, annot_kws = {'size': 12}, cmap = 'gist_gray_r', cbar = False,
+                    square = True, fmt = '.2f')
+    plt.ylabel(r'True categories', fontsize = 14)
+    plt.xlabel(r'Predicted categories', fontsize = 14)
+    plt.tick_params(labelsize = 12)
+    plt.savefig(save_name)
+
