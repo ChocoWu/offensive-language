@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from .layer import LSTM
 from .char_encoder import CharEncoderCNN, CharEncoderLSTM
 import argparse
+from allennlp.modules.elmo import Elmo, batch_to_ids
 
 
 class Hi_Attention(nn.Module):
@@ -73,7 +74,7 @@ class Hi_Attention(nn.Module):
             else:
                 self.w_input_size = self.c_hidden_size + self.embedding_size
         else:
-            self.w_input_size = self.embedding_size
+            self.w_input_size = self.embedding_size + 1024
 
         self.word_atten = LSTM(self.w_input_size, self.w_hidden_size, self.w_num_layer,
                                self.w_dropout_prob, self.w_is_bidirectional, self.w_atten_size)
@@ -83,11 +84,13 @@ class Hi_Attention(nn.Module):
 
         self.dropout = nn.Dropout(self.dropout_prob)
         self.linear = nn.Linear(self.s_hidden_size * self.s_num_directions, 2)
+        self.elmo = Elmo(config.options_file, config.weights_file, 1)
 
-    def forward(self, x_word, word_mask, sent_mask, x_char=None):
+    def forward(self, x_word, word_mask, sent_mask, x_char=None, word=None):
         """
 
         :param x_word: [batch_size, max_sent, max_word]
+        :param word: [batch_size, max_sent, max_word, max_char]
         :param word_mask: [batch_size * max_sent, max_word]
         :param sent_mask: [batch_sie, max_sent]
         :param x_char: [batch_size, max_sent, max_word, max_char]
@@ -105,11 +108,22 @@ class Hi_Attention(nn.Module):
             # print(x.size())  # 4, 6, 35
             x = self.embedding(x_word)
             x = x.view(-1, self.max_word, self.embedding_size)
+
+            # 使用elmo, 其参数(batch_size, timesteps, 50)
+            # characters = batch_to_ids(word)
+            word = word.view(-1, self.max_word, 50)
+            embeddings = self.elmo(word)
+            elmo_embeddings = embeddings['elmo_representations'][0]
+            # elmo_embeddings = elmo_embeddings[:, :self.max_word, :]
+            # elmo_mask = embeddings['mask']
+            x = torch.cat([x, elmo_embeddings], dim = 2)
         x, word_weights = self.word_atten(x, word_mask)
+        x = self.dropout(x)
         # x = F.layer_norm(x, x.size()[1:])
         dim = x.size(1)
         x = x.view(-1, self.max_sent, dim)
         x, sent_weights = self.sent_atten(x, sent_mask)
+        x = self.dropout(x)
         # x = F.layer_norm(x, x.size()[1:])
         x = self.linear(x)  # 150 * 2
         # if self.triplet:

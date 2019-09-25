@@ -14,6 +14,7 @@ import numpy as np
 # from torch.nn.utils.rnn import pad_sequence
 import string
 import data_utils
+from allennlp.modules.elmo import batch_to_ids
 
 
 class Vocabulary(object):
@@ -171,9 +172,10 @@ def pad_sequence_c(sequences, max_sent=None, max_word=None, max_char=None, paddi
 
 
 class MyDataset(Dataset):
-    def __init__(self, inputs, labels, c_inputs=None, is_use_char=True):
+    def __init__(self, inputs, labels, data=None, c_inputs=None, is_use_char=True):
         assert len(inputs) == len(labels)
         self.inputs = inputs
+        self.data = data
         self.c_inputs = c_inputs
         self.labels = labels
         self.is_use_char = is_use_char
@@ -185,6 +187,7 @@ class MyDataset(Dataset):
                    torch.tensor(self.labels[item], dtype = torch.long)
         else:
             return torch.tensor(self.inputs[item], dtype = torch.long),\
+                   self.data[item],\
                    torch.tensor(self.labels[item], dtype = torch.long)
 
     def __len__(self):
@@ -276,14 +279,34 @@ def load_data(filename, max_sent, max_word, vocab=None, is_use_char=True):
         w_input = pad_sequence(w_input, True, max_sent, max_word)
         c_input = pad_sequence_c(c_input, max_sent, max_word, 25)
         label = [vocab.tag_to_id(label) for label in label]
-        dataset = MyDataset(w_input, label, c_input, is_use_char)
+        dataset = MyDataset(w_input, label, c_inputs=c_input, is_use_char=is_use_char)
         return dataset
     else:
         w_data, label = build_data(df['content'], df['label'])
+
+        character_ids = []
+        for data in w_data:
+            temp_tensor = torch.zeros(6, 35, 50, dtype = torch.long)
+            temp_ids = batch_to_ids(data)
+            t_max_sent = temp_ids.size(0)
+            t_max_word = temp_ids.size(1)
+            if t_max_sent > 6:
+                if t_max_word > 35:
+                    temp_tensor = temp_ids[:6, :35, :]
+                else:
+                    temp_tensor[:, :t_max_word, :] = temp_ids[:6, :, :]
+            else:
+                if t_max_word > 35:
+                    temp_tensor[:t_max_sent, :, :] = temp_ids[:, :35, :]
+                else:
+                    temp_tensor[:t_max_sent, :t_max_word, :] = temp_ids[:, :, :]
+            character_ids.append(temp_tensor)
+
         w_input = [[[vocab.word_to_id(word) for word in sent] for sent in doc] for doc in w_data]
         w_input = pad_sequence(w_input, True, max_sent, max_word)
         label = [vocab.tag_to_id(label) for label in label]
-        dataset = MyDataset(w_input, label, is_use_char = is_use_char)
+        dataset = MyDataset(w_input, label, data=character_ids, is_use_char = is_use_char)
+        # print(dataset.__getitem__(0))
         return dataset
 
 
@@ -299,8 +322,13 @@ def build_vocab(config):
     # tw_test_data, tw_test_label = build_data(tw_test_df['content'], tw_test_df['label'])
 
     vocab = Vocabulary()
+    for idx, doc in enumerate(train_data):
+        for data in doc:
+            vocab.add_sentence(data, train_label[idx])
+            print(data)
+    # [[print(data) for data in doc] for doc in train_data]
 
-    [[vocab.add_sentence(x, y) for (x, y) in zip(data, train_label)] for data in train_data]
+    # [[vocab.add_sentence(x, y) for (x, y) in zip(data, train_label)] for data in train_data]
     # [[vocab.add_sentence(x, y) for (x, y) in zip(data, valid_label)] for data in valid_data]
     # [[vocab.add_sentence(x, y) for (x, y) in zip(data, fb_test_label)] for data in fb_test_data]
     # [[vocab.add_sentence(x, y) for (x, y) in zip(data, tw_test_label)] for data in tw_test_data]
@@ -329,20 +357,17 @@ def load_embedding(config, vocab):
 
 class Config(object):
     def __init__(self):
-        self.train_file = './data/english/agr_en_train.csv'
-        self.valid_file = './data/english/agr_en_dev.csv'
-        self.test_file = './data/english/test_file.csv'
+        self.train_file = 'test.csv'
+        self.valid_file = 'test.csv'
+        self.test_file = 'test.csv'
 
         self.max_sent = 6
         self.max_word = 35
 
 
-# if __name__ == '__main__':
-#     config = Config()
-#     test_dataset, vocab = load_data(config)
-    # x = [[torch.Tensor([2, 3, 4]), torch.Tensor([5, 6, 7, 8, 9])],
-    #      [torch.Tensor([5, 6, 7, 8])]]
-    # x = pad_sequence(x, True)
-    # print(x)
-    # x = 10
+if __name__ == '__main__':
+    config = Config()
+    vocab = build_vocab(config)
+    dataset = load_data(config.train_file, config.max_sent, config.max_word, vocab, is_use_char = False)
+
 

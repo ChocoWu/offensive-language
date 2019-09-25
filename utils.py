@@ -11,6 +11,8 @@ import numpy as np
 from sklearn.metrics import confusion_matrix
 import seaborn
 import pandas as pd
+from pylab import mpl
+mpl.rcParams['mathtext.fontset'] = 'cm'
 
 
 def save_model(model, model_path):
@@ -30,7 +32,7 @@ def load_model(model, model_path, use_cuda=False):
 
 def get_logger(pathname):
     logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     formatter = logging.Formatter("%(asctime)s - [line:%(lineno)d] - %(levelname)s: %(message)s",
                                   datefmt='%Y-%m-%d %H:%M:%S')
 
@@ -107,18 +109,22 @@ def extract_embeddings(dataloader, model, config):
                         mask = w_inputs.ne(0).byte()
                         word_mask = mask.reshape(-1, mask.size(2))
                         sent_mask = mask.sum(2).ne(0).byte()
-                        embeddings[k:k + len(w_inputs)] = model(w_inputs, word_mask, sent_mask, c_inputs)[0].cpu().numpy()
+                        embeddings[k:k + len(w_inputs)] = model(x_word=w_inputs, word_mask=word_mask,
+                                                                sent_mask=sent_mask, x_char=c_inputs,
+                                                                word=None)[0].cpu().numpy()
                         labels[k:k + len(w_inputs)] = target.numpy()
                         k += len(w_inputs)
             else:
-                for inputs, target in dataloader:
+                for inputs, data, target in dataloader:
                     if config.use_gpu:
                         inputs = inputs.cuda()
+                        data = data.cuda()
                         # labels = labels.cuda()
                     mask = inputs.ne(0).byte()
                     word_mask = mask.view(-1, mask.size(2))
                     sent_mask = mask.sum(2).ne(0).byte()
-                    embeddings[k:k + len(inputs)] = model(inputs, word_mask, sent_mask)[0].cpu().numpy()
+                    embeddings[k:k + len(inputs)] = model(x_word=inputs, word_mask=word_mask,
+                                                          sent_mask=sent_mask, x_char=None, word=data)[0].cpu().numpy()
                     labels[k:k + len(inputs)] = target.numpy()
                     k += len(inputs)
 
