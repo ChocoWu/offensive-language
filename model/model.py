@@ -9,11 +9,13 @@ from .layer import LSTM
 from .char_encoder import CharEncoderCNN, CharEncoderLSTM
 import argparse
 from allennlp.modules.elmo import Elmo, batch_to_ids
+from utils import *
 
 
 class Hi_Attention(nn.Module):
-    def __init__(self, config, w_embedding=None, c_embedding=None):
+    def __init__(self, config, w_embedding=None, c_embedding=None, l_embedding=None):
         super(Hi_Attention, self).__init__()
+        self.config = config
         self.vocab_size = config.vocab_size
         self.embedding_size = config.embedding_size
         self.dropout_prob = config.dropout_prob
@@ -35,7 +37,7 @@ class Hi_Attention(nn.Module):
         self.s_is_bidirectional = config.s_is_bidirectional
         self.s_dropout_prob = config.s_dropout_prob
 
-        self.is_use_char = config.is_use_char
+        self.use_type = config.use_type
         self.char_encode_type = config.char_encode_type
         self.alphabet_size = config.alphabet_size
         self.c_embedding_size = config.c_embedding_size
@@ -47,8 +49,12 @@ class Hi_Attention(nn.Module):
         self.c_num_filter = config.num_filter
 
         self.embedding = nn.Embedding(self.vocab_size, self.embedding_size)
+        self.label_embedding = nn.Embedding(config.n_tags, self.embedding_size)
         if w_embedding is not None:
             self.embedding.weight = nn.Parameter(w_embedding)
+
+        if l_embedding is not None:
+            self.label_embedding.weight = nn.Parameter(l_embedding)
 
         if self.w_is_bidirectional:
             self.w_num_directions = 2
@@ -68,13 +74,15 @@ class Hi_Attention(nn.Module):
                                                self.c_num_layer, self.c_is_bidirectional, self.c_dropout_prob,
                                                c_embedding)
 
-        if self.is_use_char:
+        if self.use_type == 'char':
             if self.c_is_bidirectional:
                 self.w_input_size = self.c_hidden_size * 2 + self.embedding_size
             else:
                 self.w_input_size = self.c_hidden_size + self.embedding_size
-        else:
+        elif self.use_type == 'elmo':
             self.w_input_size = self.embedding_size + 1024
+        else:
+            self.w_input_size = self.embedding_size
 
         self.word_atten = LSTM(self.w_input_size, self.w_hidden_size, self.w_num_layer,
                                self.w_dropout_prob, self.w_is_bidirectional, self.w_atten_size)
@@ -85,6 +93,28 @@ class Hi_Attention(nn.Module):
         self.dropout = nn.Dropout(self.dropout_prob)
         self.linear = nn.Linear(self.s_hidden_size * self.s_num_directions, 2)
         self.elmo = Elmo(config.options_file, config.weights_file, 1)
+
+    def label_embedding(self, y):
+        """
+
+        :param y: [batch_size]
+        :return:
+        """
+        label = [decode_label(self.config.id2tag[0]), decode_label(self.config.id2tag[1]), decode_label(self.config.id2tag[2])]
+        label_char2id = [[self.config.vocab.char2id(i) for i in j] for j in label]
+        if self.config.is_use_char:
+            label_w_embedding = self.embedding(label)
+            label_c_embedding = self.char_encode(label_char2id)
+            print(label_w_embedding.size())
+            print(label_c_embedding.size())
+            label_embedding = torch.cat([label_w_embedding, label_c_embedding], dim = 2)
+            print(label_embedding.size())
+        else:
+            label_w_embedding = self.embedding(label)
+            label_character_ids = batch_to_ids(label)
+            label_c_embedding = self.elmo(label_character_ids)
+            label_embedding = torch.cat([label_w_embedding, label_c_embedding], dim = 2)
+        return label_embedding
 
     def forward(self, x_word, word_mask, sent_mask, x_char=None, word=None):
         """
@@ -97,14 +127,14 @@ class Hi_Attention(nn.Module):
         :return:
             [batch_size, num_class]
         """
-        if self.is_use_char and x_char is not None:
+        if self.use_type == 'char' and x_char is not None:
             x_char = x_char.view(-1, x_char.size(3))
             x_char = self.char_encode(x_char)
             x_char = x_char.view(-1, self.max_word, x_char.size(1))
             x_word = self.embedding(x_word)
             x_word = x_word.view(-1, self.max_word, self.embedding_size)
             x = torch.cat([x_word, x_char], dim = 2)
-        else:
+        elif self.use_type == 'elmo' and word is not None:
             # print(x.size())  # 4, 6, 35
             x = self.embedding(x_word)
             x = x.view(-1, self.max_word, self.embedding_size)
@@ -117,6 +147,10 @@ class Hi_Attention(nn.Module):
             # elmo_embeddings = elmo_embeddings[:, :self.max_word, :]
             # elmo_mask = embeddings['mask']
             x = torch.cat([x, elmo_embeddings], dim = 2)
+        else:
+            x = self.embedding(x_word)
+            x = x.view(-1, self.max_word, self.embedding_size)
+
         x, word_weights = self.word_atten(x, word_mask)
         x = self.dropout(x)
         # x = F.layer_norm(x, x.size()[1:])

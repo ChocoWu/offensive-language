@@ -100,7 +100,7 @@ def extract_embeddings(dataloader, model, config):
         labels = np.zeros(len(dataloader.dataset))
         k = 0
         with torch.no_grad():
-            if config.is_use_char:
+            if config.use_type == 'char':
                 for w_inputs, c_inputs, target in dataloader:
                     if config.use_gpu:
                         w_inputs = w_inputs.cuda()
@@ -114,7 +114,7 @@ def extract_embeddings(dataloader, model, config):
                                                                 word=None)[0].cpu().numpy()
                         labels[k:k + len(w_inputs)] = target.numpy()
                         k += len(w_inputs)
-            else:
+            elif config.use_type == 'elmo':
                 for inputs, data, target in dataloader:
                     if config.use_gpu:
                         inputs = inputs.cuda()
@@ -125,6 +125,19 @@ def extract_embeddings(dataloader, model, config):
                     sent_mask = mask.sum(2).ne(0).byte()
                     embeddings[k:k + len(inputs)] = model(x_word=inputs, word_mask=word_mask,
                                                           sent_mask=sent_mask, x_char=None, word=data)[0].cpu().numpy()
+                    labels[k:k + len(inputs)] = target.numpy()
+                    k += len(inputs)
+            else:
+                for inputs, target in dataloader:
+                    if config.use_gpu:
+                        inputs = inputs.cuda()
+                        # data = data.cuda()
+                        # labels = labels.cuda()
+                    mask = inputs.ne(0).byte()
+                    word_mask = mask.view(-1, mask.size(2))
+                    sent_mask = mask.sum(2).ne(0).byte()
+                    embeddings[k:k + len(inputs)] = model(x_word=inputs, word_mask=word_mask,
+                                                          sent_mask=sent_mask)[0].cpu().numpy()
                     labels[k:k + len(inputs)] = target.numpy()
                     k += len(inputs)
 

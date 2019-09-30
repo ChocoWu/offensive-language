@@ -172,22 +172,25 @@ def pad_sequence_c(sequences, max_sent=None, max_word=None, max_char=None, paddi
 
 
 class MyDataset(Dataset):
-    def __init__(self, inputs, labels, data=None, c_inputs=None, is_use_char=True):
+    def __init__(self, inputs, labels, data=None, c_inputs=None, use_type=None):
         assert len(inputs) == len(labels)
         self.inputs = inputs
         self.data = data
         self.c_inputs = c_inputs
         self.labels = labels
-        self.is_use_char = is_use_char
+        self.use_type = use_type
 
     def __getitem__(self, item):
-        if self.is_use_char:
+        if self.use_type == 'char':
             return torch.tensor(self.inputs[item], dtype = torch.long), \
                    torch.tensor(self.c_inputs[item], dtype = torch.long), \
                    torch.tensor(self.labels[item], dtype = torch.long)
-        else:
+        elif self.use_type == 'elmo':
             return torch.tensor(self.inputs[item], dtype = torch.long),\
                    self.data[item],\
+                   torch.tensor(self.labels[item], dtype = torch.long)
+        else:
+            return torch.tensor(self.inputs[item], dtype = torch.long),\
                    torch.tensor(self.labels[item], dtype = torch.long)
 
     def __len__(self):
@@ -269,19 +272,19 @@ def build_data_c(doc, labels):
 #     return train_dataset, valid_dataset, test_dataset, vocab
 
 
-def load_data(filename, max_sent, max_word, vocab=None, is_use_char=True):
+def load_data(filename, max_sent, max_word, vocab=None, use_type=None):
     df = pd.read_csv(filename, header = 0, names = ['face_id', 'content', 'label'])
 
-    if is_use_char:
+    if use_type == 'char':
         w_data, c_data, label = build_data_c(df['content'], df['label'])
         w_input = [[[vocab.word_to_id(word) for word in sent] for sent in doc] for doc in w_data]
         c_input = [[[[vocab.char_to_id(c) for c in word] for word in sent] for sent in doc] for doc in c_data]
         w_input = pad_sequence(w_input, True, max_sent, max_word)
         c_input = pad_sequence_c(c_input, max_sent, max_word, 25)
         label = [vocab.tag_to_id(label) for label in label]
-        dataset = MyDataset(w_input, label, c_inputs=c_input, is_use_char=is_use_char)
+        dataset = MyDataset(w_input, label, c_inputs=c_input, use_type = use_type)
         return dataset
-    else:
+    elif use_type == 'elmo':
         w_data, label = build_data(df['content'], df['label'])
 
         character_ids = []
@@ -305,8 +308,16 @@ def load_data(filename, max_sent, max_word, vocab=None, is_use_char=True):
         w_input = [[[vocab.word_to_id(word) for word in sent] for sent in doc] for doc in w_data]
         w_input = pad_sequence(w_input, True, max_sent, max_word)
         label = [vocab.tag_to_id(label) for label in label]
-        dataset = MyDataset(w_input, label, data=character_ids, is_use_char = is_use_char)
-        # print(dataset.__getitem__(0))
+        dataset = MyDataset(w_input, label, data=character_ids, use_type = use_type)
+
+        return dataset
+    else:
+        w_data, label = build_data(df['content'], df['label'])
+        w_input = [[[vocab.word_to_id(word) for word in sent] for sent in doc] for doc in w_data]
+        w_input = pad_sequence(w_input, True, max_sent, max_word)
+        label = [vocab.tag_to_id(label) for label in label]
+        dataset = MyDataset(w_input, label, use_type = use_type)
+
         return dataset
 
 
@@ -355,6 +366,23 @@ def load_embedding(config, vocab):
     return embedding
 
 
+def load_label_embedding(config, vocab):
+    embedding_index = {}
+    with open(config.embedding_file, encoding = 'utf-8') as f:
+        for line in f:
+            values = line.strip().rsplit(' ')
+            word = values[0]
+            coefs = np.asarray(values[1:], dtype = 'float32')
+            embedding_index[word] = coefs
+        scale = np.sqrt(3.0 / config.embedding_size)
+        label_embedding = np.random.uniform(-scale, scale, (vocab.n_tags, config.embedding_size))
+
+        for tag, vector in embedding_index.items():
+            if tag in vocab.tag2id:
+                label_embedding[vocab.tag2id[tag]] = vector
+        return label_embedding
+
+
 class Config(object):
     def __init__(self):
         self.train_file = 'test.csv'
@@ -368,6 +396,7 @@ class Config(object):
 if __name__ == '__main__':
     config = Config()
     vocab = build_vocab(config)
-    dataset = load_data(config.train_file, config.max_sent, config.max_word, vocab, is_use_char = False)
+    dataset = load_data(config.train_file, config.max_sent, config.max_word, vocab)
+    print('done')
 
 

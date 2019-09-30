@@ -58,24 +58,60 @@ class LSTM(nn.Module):
     def attention_net(self, lstm_output, final_state, mask):
         """
 
-        :param lstm_out:  batch_size, seq_len, hidden_size * num_directions
+        :param lstm_output:  batch_size, seq_len, hidden_size * num_directions
         :param final_state: batch_size, num_layers * num_directions, hidden_size
         :return:
         """
 
         hidden = torch.reshape(final_state, [-1, self.num_layer * self.num_directions * self.hidden_size])
-        hidden = self.linear_2(hidden)
+        hidden = self.linear_2(hidden)  # [batch_size, attention_size]
         # print(hidden.size())
-        atten_lstm = torch.tanh(self.linear_1(lstm_output))
+        atten_lstm = torch.tanh(self.linear_1(lstm_output))  # [batch_size, seq_len, attention_size]
         # print(atten_lstm.size())
+        # [batch_size, seq_len, attention_size] * [batch_size, attention_size, 1] -> [batch_size, seq_len, 1]
+        # -> [batch_size, seq_len]
         atten_weights = torch.bmm(atten_lstm, hidden.unsqueeze(2)).squeeze(2)
-        soft_attn_weights = F.softmax(atten_weights, 1)
+        soft_attn_weights = F.softmax(atten_weights, 1)  # [batch_size, seq_len]
         w = soft_attn_weights * (mask.float())
         weights = w / (w.sum(1, keepdim=True) + 1e-13)
 
         new_hidden_state = torch.bmm(lstm_output.transpose(1, 2), weights.unsqueeze(2)).squeeze(2)
 
         return new_hidden_state, weights
+
+    def label_attention(self, lstm_output, label, label_embedding_size, attention_size, mask):
+        """
+
+        :param lstm_output:  batch_size, seq_len, hidden_size * num_directions
+        :param label: batch_size, embedding_size
+        :param label_embedding_size: if use_char 340 else 1324
+        :param attention_size: hidden_size * num_directions
+        :return:
+        """
+        w = nn.Parameter(torch.tensor(label_embedding_size, attention_size))
+        b = nn.Parameter(torch.tensor(300))
+
+        label_embedding = F.linear(label, w, b)  # [3, attention_size]
+        # [batch_size, 3, attention_size]*[batch_size, seq_len, hidden_size * num_directions]->[batch_size, seq_len, 3]
+        # calculate  (C·V)/(||c||||v||)
+        G = torch.matmul(lstm_output, label_embedding.transpose(0, 1))
+        c = torch.norm(label_embedding.transpose(0, 1), dim = 0)
+        v = torch.norm(lstm_output, dim = 1)
+        g = torch.matmul(v.unsqueeze(2), c.unsqueeze(1))
+        G = torch.div(G, g)  # [batch_size, seq_len, 3]
+
+        # to further capture the relative spatial information among consecutive words, using cnn and activate function
+        # pass
+
+        # calculate the attention weights
+        m = torch.max(G, dim = 2)
+        m = F.softmax(m, 1)
+        w = m * (mask.float())
+        weights = w / (w.sum(1, keepdim = True) + 1e-13)
+
+        output = torch.bmm(lstm_output.transpose(1, 2), weights.unsqueeze(2)).squeeze(2)
+
+        return output, weights
 
     def forward(self, x, mask):
         """
