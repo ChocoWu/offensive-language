@@ -14,7 +14,7 @@ import time
 import c_data_utils
 import numpy as np
 import torch.optim as optim
-import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from model.model import Hi_Attention
 from model.model import ClassificationNet
@@ -70,14 +70,22 @@ def calculate_weights(inputs, classes):
 
 
 class Trainer(object):
-    def __init__(self, config, w_embedding, c_embedding=None, l_embedding=None, ):
+    def __init__(self, config, w_embedding, c_embedding=None, l_embedding=None):
         self.config = config
-        self.model = Hi_Attention(self.config, w_embedding, c_embedding, l_embedding)
+        self.l_embedding = l_embedding
+        self.model = Hi_Attention(self.config, w_embedding = w_embedding, c_embedding = c_embedding)
         self.classification_net = ClassificationNet(self.config)
         self.triplet_selector = HardestNegativeTripletSelector(self.config.margin)
         self.online_triplet_loss = OnlineTripletLoss(self.config.margin, self.triplet_selector)
 
-        self.optim = optim.Adam(self.model.parameters(), lr = config.lr, weight_decay = config.weight_decay)
+        ignored_params = list(map(id, self.model.elmo._scalar_mixes[0].parameters()))
+        base_params = filter(lambda p: id(p) not in ignored_params, self.model.parameters())
+
+        self.optim = optim.Adam(
+            [{'params': base_params}, {'params': self.model.elmo._scalar_mixes[0].parameters(), "lr": 1e-2}],
+            lr = self.config.lr, weight_decay = config.weight_decay)
+
+        # self.optim = optim.Adam(self.model.parameters(), lr = config.lr, weight_decay = config.weight_decay)
         self.criterion = nn.CrossEntropyLoss()
 
         if config.use_gpu:
@@ -86,7 +94,6 @@ class Trainer(object):
             # self.triplet_selector = self.triplet_selector.cuda()
 
     def __call__(self, train_dataset, valid_dataset, fb_test_dataset, tw_test_dataset):
-        best_fb_test_f1 = 0.
         best_fb_test_f1 = 0.
         best_tw_test_f1 = 0.
         patience = 0
@@ -98,6 +105,9 @@ class Trainer(object):
                 else:
                     self.model.embedding.weight.requires_grad = True
             loss, during_time, loss_array, weighted_f1, macro_f1, p, r, acc = self.train(train_dataset)
+
+            for i in self.model.elmo._scalar_mixes[0].scalar_parameters.parameters():
+                logger.info(i)
             loss_arr.extend(loss_array)
             logger.info("Epoch: {} Loss: {:.4f} Time: {}".format(epoch, loss, int(during_time)))
             logger.info("Epoch: {} Train Acc: {:.4f} P: {:.4f} R: {:.4f} F1:{:.4f} Time: {}".
@@ -108,8 +118,6 @@ class Trainer(object):
                         format(epoch, acc, p, r, weighted_f1, int(during_time)))
 
             fb_test_f1, _, fb_test_p, fb_test_r, fb_test_acc, t_during_time, fb_pred_labels, fb_gold_labels, fb_word_weights, fb_sent_weights = self.eval(fb_test_dataset)
-            # print("fb_pred_labels:\n", fb_pred_labels)
-            # print("fb_gold_labels:\n", fb_gold_labels)
             logger.info("Epoch: {} Facebook Test Acc: {:.4f} P: {:.4f} R: {:.4f} F1:{:.4f} Time: {}".
                         format(epoch, fb_test_acc, fb_test_p, fb_test_r, fb_test_f1, int(t_during_time)))
 
@@ -171,6 +179,7 @@ class Trainer(object):
                 word_weights, sent_weights, pred_labels, gold_labels = self.eval_use_char(dataset)
             elif self.config.use_type == 'elmo':
                 word_weights, sent_weights, pred_labels, gold_labels = self.eval_use_elmo(dataset)
+                print("word_weights:\n", word_weights)
             else:
                 word_weights, sent_weights, pred_labels, gold_labels = self.eval_use_word(dataset)
 
@@ -195,7 +204,13 @@ class Trainer(object):
             mask = w_inputs.ne(0).byte()
             word_mask = mask.reshape(-1, mask.size(2))
             sent_mask = mask.sum(2).ne(0).byte()
-            output, word_weights, sent_weights = self.model(w_inputs, word_mask, sent_mask, c_inputs)
+            if self.l_embedding is not None:
+                label_embedding = torch.tensor(self.l_embedding, dtype = torch.float)
+                output, word_weights, sent_weights = self.model(x_word=w_inputs, word_mask=word_mask,
+                                                                sent_mask=sent_mask, x_char=c_inputs,
+                                                                label = label_embedding)
+            else:
+                output, word_weights, sent_weights = self.model(w_inputs, word_mask, sent_mask, c_inputs)
             if self.config.triplet:
                 triplet_loss, triplet_len = self.online_triplet_loss(output, labels)
                 output = self.classification_net(output)
@@ -229,17 +244,23 @@ class Trainer(object):
         pred_labels = []
         gold_labels = []
         loss_array = []
-        for inputs, data, labels in tqdm(dataset):
+        for input1, input2, labels in tqdm(dataset):
             if self.config.use_gpu:
-                inputs = inputs.cuda()
-                data = data.cuda()
+                input1 = input1.cuda()
+                input2 = input2.cuda()
                 labels = labels.cuda()
-            mask = inputs.ne(0).byte()
+            mask = input1.ne(0).byte()
             word_mask = mask.reshape(-1, mask.size(2))
             sent_mask = mask.sum(2).ne(0).byte()
-
-            output, word_weights, sent_weights = self.model(x_word = inputs, word_mask = word_mask,
-                                                            sent_mask = sent_mask, x_char = None, word = data)
+            if self.l_embedding is not None:
+                label_embedding = torch.tensor(self.l_embedding, dtype = torch.float)
+                output, word_weights, sent_weights = self.model(x_word=input1, word_mask=word_mask,
+                                                                sent_mask=sent_mask, x_char=None,
+                                                                word=input2, label=label_embedding)
+            else:
+                output, word_weights, sent_weights = self.model(x_word = input1, word_mask=word_mask,
+                                                                sent_mask=sent_mask, x_char = None,
+                                                                word=input2)
             if self.config.triplet:
                 triplet_loss, triplet_len = self.online_triplet_loss(output, labels)
                 output = self.classification_net(output)
@@ -284,8 +305,12 @@ class Trainer(object):
             mask = inputs.ne(0).byte()
             word_mask = mask.reshape(-1, mask.size(2))
             sent_mask = mask.sum(2).ne(0).byte()
-
-            output, word_weights, sent_weights = self.model(inputs, word_mask, sent_mask)
+            if self.l_embedding is not None:
+                label_embedding = torch.tensor(self.l_embedding, dtype = torch.float)
+                output, word_weights, sent_weights = self.model(x_word=inputs, word_mask=word_mask,
+                                                                sent_mask=sent_mask, label=label_embedding)
+            else:
+                output, word_weights, sent_weights = self.model(inputs, word_mask, sent_mask)
             if self.config.triplet:
                 triplet_loss, triplet_len = self.online_triplet_loss(output, labels)
                 output = self.classification_net(output)
@@ -333,12 +358,18 @@ class Trainer(object):
             mask = inputs.ne(0).byte()
             word_mask = mask.view(-1, mask.size(2))
             sent_mask = mask.sum(2).ne(0).byte()
-            output, word_weight, sent_weight = self.model(inputs, word_mask, sent_mask, c_inputs)
+            if self.l_embedding is not None:
+                label_embedding = torch.tensor(self.l_embedding, dtype = torch.float)
+                output, word_weight, sent_weight = self.model(x_word=inputs, word_mask=word_mask,
+                                                              sent_mask=sent_mask, x_char=c_inputs,
+                                                              label = label_embedding)
+            else:
+                output, word_weight, sent_weight = self.model(inputs, word_mask, sent_mask, c_inputs)
             # if self.config.triplet:
             output = self.classification_net(output)
             result = torch.max(output, 1)[1]
-            word_weights.append(word_weight.cpu().numpy())
-            sent_weights.append(sent_weight.cpu().numpy())
+            word_weights.extend(word_weight.cpu().numpy())
+            sent_weights.extend(sent_weight.cpu().numpy())
             pred_labels.extend(result.cpu().numpy().tolist())
             gold_labels.extend(labels.cpu().numpy().tolist())
         return word_weights, sent_weights, pred_labels, gold_labels
@@ -362,13 +393,19 @@ class Trainer(object):
             mask = inputs.ne(0).byte()
             word_mask = mask.view(-1, mask.size(2))
             sent_mask = mask.sum(2).ne(0).byte()
-            output, word_weight, sent_weight = self.model(x_word = inputs, word_mask = word_mask,
-                                                          sent_mask = sent_mask, x_char = None, word = data)
+            if self.l_embedding is not None:
+                label_embedding = torch.tensor(self.l_embedding, dtype = torch.float)
+                output, word_weight, sent_weight = self.model(x_word=inputs, word_mask=word_mask,
+                                                              sent_mask=sent_mask, x_char=None,
+                                                              word=data, label = label_embedding)
+            else:
+                output, word_weight, sent_weight = self.model(x_word=inputs, word_mask=word_mask,
+                                                              sent_mask=sent_mask, x_char=None, word=data)
             # if self.config.triplet:
             output = self.classification_net(output)
             result = torch.max(output, 1)[1]
-            word_weights.append(word_weight.cpu().numpy())
-            sent_weights.append(sent_weight.cpu().numpy())
+            word_weights.extend(word_weight.cpu().numpy())
+            sent_weights.extend(sent_weight.cpu().numpy())
             pred_labels.extend(result.cpu().numpy().tolist())
             gold_labels.extend(labels.cpu().numpy().tolist())
         return word_weights, sent_weights, pred_labels, gold_labels
@@ -390,17 +427,22 @@ class Trainer(object):
             mask = inputs.ne(0).byte()
             word_mask = mask.view(-1, mask.size(2))
             sent_mask = mask.sum(2).ne(0).byte()
-            output, word_weight, sent_weight = self.model(inputs, word_mask, sent_mask)
+            if self.l_embedding is not None:
+                label_embedding = torch.tensor(self.l_embedding, dtype = torch.float)
+                output, word_weight, sent_weight = self.model(x_word = inputs, word_mask = word_mask,
+                                                              sent_mask = sent_mask, label = label_embedding)
+            else:
+                output, word_weight, sent_weight = self.model(inputs, word_mask, sent_mask)
             # if self.config.triplet:
             output = self.classification_net(output)
 
-            print(output)
+            # print(output)
             result = torch.max(output, 1)[1]
             pred_labels.extend(result.cpu().numpy().tolist())
             gold_labels.extend(labels.cpu().numpy().tolist())
 
-            word_weights.append(word_weight.cpu().numpy())
-            sent_weights.append(sent_weight.cpu().numpy())
+            word_weights.extend(word_weight.cpu().numpy())
+            sent_weights.extend(sent_weight.cpu().numpy())
 
         return word_weights, sent_weights, pred_labels, gold_labels
 
@@ -426,6 +468,7 @@ if __name__ == '__main__':
     parser.add_argument("--config_path", type = str, default = "./checkpoint/config.pt")
     parser.add_argument("--vocab_path", type = str, default = "./checkpoint/vocab.pt")
     parser.add_argument("--embedding_path", type = str, default = "./checkpoint/embedding.pt")
+    parser.add_argument("--label_embedding_path", type = str, default = './checkpoint/label_embedding.pt')
     parser.add_argument("--continue_train", type = bool, default = False, help = "continue to train model")
     parser.add_argument("--pretrain_embedding", type = bool, default = True)
     parser.add_argument("--embedding_file", type = str, default = "./data/glove.840B.300d.txt")
@@ -437,10 +480,10 @@ if __name__ == '__main__':
 
     parser.add_argument("--use_type", type = str, default = 'word')
     parser.add_argument("--seed", type = int, default = 123, help = "seed for random")
-    parser.add_argument("--batch_size", type = int, default = 150, help = "number of batch size")
+    parser.add_argument("--batch_size", type = int, default = 15, help = "number of batch size")
     parser.add_argument("--epochs", type = int, default = 100, help = "number of epochs")
     parser.add_argument("--embedding_size", type = int, default = 300)
-    parser.add_argument("--lr", type = float, default = 0.003, help = "learning rate of adam")
+    parser.add_argument("--lr", type = float, default = 0.0003, help = "learning rate of adam")
     parser.add_argument("--weight_decay", type = float, default = 1e-5, help = "weight decay of adam")
     parser.add_argument("--patience", type = int, default = 15)
     parser.add_argument("--freeze", type = int, default = 5)
@@ -449,7 +492,7 @@ if __name__ == '__main__':
     parser.add_argument("--max_sent", type = int, default = 6)
     parser.add_argument("--max_word", type = int, default = 35)
 
-    parser.add_argument("--triplet", type = bool, default = True)
+    parser.add_argument("--triplet", type = bool, default = False)
     parser.add_argument("--margin", type = float, default = 1.0)
     parser.add_argument("--alpha", type = float, default = 0.5)
 
@@ -547,7 +590,7 @@ if __name__ == '__main__':
     args.id2tag = vocab.id2tag
     print(vocab.id2tag)
 
-    trainer = Trainer(args, w_embedding)
+    trainer = Trainer(args, w_embedding, l_embedding = label_embedding)
 
     if args.continue_train:
         logger.info("Loading model...")

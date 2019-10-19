@@ -49,12 +49,12 @@ class Hi_Attention(nn.Module):
         self.c_num_filter = config.num_filter
 
         self.embedding = nn.Embedding(self.vocab_size, self.embedding_size)
-        self.label_embedding = nn.Embedding(config.n_tags, self.embedding_size)
+        # self.label_embedding = nn.Embedding(self.config.n_tags, self.embedding_size)
         if w_embedding is not None:
             self.embedding.weight = nn.Parameter(w_embedding)
 
-        if l_embedding is not None:
-            self.label_embedding.weight = nn.Parameter(l_embedding)
+        # if l_embedding is not None:
+        #     self.label_embedding.weight = nn.Parameter(l_embedding)
 
         if self.w_is_bidirectional:
             self.w_num_directions = 2
@@ -94,29 +94,7 @@ class Hi_Attention(nn.Module):
         self.linear = nn.Linear(self.s_hidden_size * self.s_num_directions, 2)
         self.elmo = Elmo(config.options_file, config.weights_file, 1)
 
-    def label_embedding(self, y):
-        """
-
-        :param y: [batch_size]
-        :return:
-        """
-        label = [decode_label(self.config.id2tag[0]), decode_label(self.config.id2tag[1]), decode_label(self.config.id2tag[2])]
-        label_char2id = [[self.config.vocab.char2id(i) for i in j] for j in label]
-        if self.config.is_use_char:
-            label_w_embedding = self.embedding(label)
-            label_c_embedding = self.char_encode(label_char2id)
-            print(label_w_embedding.size())
-            print(label_c_embedding.size())
-            label_embedding = torch.cat([label_w_embedding, label_c_embedding], dim = 2)
-            print(label_embedding.size())
-        else:
-            label_w_embedding = self.embedding(label)
-            label_character_ids = batch_to_ids(label)
-            label_c_embedding = self.elmo(label_character_ids)
-            label_embedding = torch.cat([label_w_embedding, label_c_embedding], dim = 2)
-        return label_embedding
-
-    def forward(self, x_word, word_mask, sent_mask, x_char=None, word=None):
+    def forward(self, x_word, word_mask, sent_mask, x_char=None, word=None, label=None):
         """
 
         :param x_word: [batch_size, max_sent, max_word]
@@ -150,20 +128,29 @@ class Hi_Attention(nn.Module):
         else:
             x = self.embedding(x_word)
             x = x.view(-1, self.max_word, self.embedding_size)
+        if label is not None:
+            x, word_weights = self.word_atten(x, word_mask, label = label)
+            x = self.dropout(x)
+            dim = x.size(1)
+            x = x.view(-1, self.max_sent, dim)
+            x, sent_weights = self.sent_atten(x, sent_mask, label = label)
+            x = self.dropout(x)
+            x = self.linear(x)  # 150 * 2
+        else:
+            x, word_weights = self.word_atten(x, word_mask)
+            x = self.dropout(x)
+            # x = F.layer_norm(x, x.size()[1:])
+            dim = x.size(1)
+            x = x.view(-1, self.max_sent, dim)
+            x, sent_weights = self.sent_atten(x, sent_mask)
+            x = self.dropout(x)
+            # x = F.layer_norm(x, x.size()[1:])
+            x = self.linear(x)  # 150 * 2
+            # if self.triplet:
+            #     return x  # 直接返回embedding的结果
+            # else:
+            #     x = self.linear(x)
 
-        x, word_weights = self.word_atten(x, word_mask)
-        x = self.dropout(x)
-        # x = F.layer_norm(x, x.size()[1:])
-        dim = x.size(1)
-        x = x.view(-1, self.max_sent, dim)
-        x, sent_weights = self.sent_atten(x, sent_mask)
-        x = self.dropout(x)
-        # x = F.layer_norm(x, x.size()[1:])
-        x = self.linear(x)  # 150 * 2
-        # if self.triplet:
-        #     return x  # 直接返回embedding的结果
-        # else:
-        #     x = self.linear(x)
         return x, word_weights, sent_weights
 
 

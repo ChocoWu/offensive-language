@@ -36,6 +36,8 @@ class LSTM(nn.Module):
         self.linear_2 = nn.Linear(self.hidden_size * self.num_directions * self.num_layer, self.attention_size)
         self._reset_parameter()
 
+        self.l_conv = nn.Conv1d(3, 3, 3, padding = 1)
+
     def _reset_parameter(self):
         stdv = 1.0 / math.sqrt(self.hidden_size)
         for weight in self.parameters():
@@ -88,23 +90,24 @@ class LSTM(nn.Module):
         :param attention_size: hidden_size * num_directions
         :return:
         """
-        w = nn.Parameter(torch.tensor(label_embedding_size, attention_size))
-        b = nn.Parameter(torch.tensor(300))
-
-        label_embedding = F.linear(label, w, b)  # [3, attention_size]
-        # [batch_size, 3, attention_size]*[batch_size, seq_len, hidden_size * num_directions]->[batch_size, seq_len, 3]
-        # calculate  (C·V)/(||c||||v||)
-        G = torch.matmul(lstm_output, label_embedding.transpose(0, 1))
-        c = torch.norm(label_embedding.transpose(0, 1), dim = 0)
-        v = torch.norm(lstm_output, dim = 1)
-        g = torch.matmul(v.unsqueeze(2), c.unsqueeze(1))
+        w = nn.Parameter(torch.randn(label_embedding_size, attention_size))
+        b = nn.Parameter(torch.zeros(300))
+        label_embedding = torch.tanh(F.linear(label, w, b))  # [3, attention_size]
+        # [batch_size, seq_len, hidden_size * num_directions] -> [batch_size, seq_len, attention_size]
+        atten_lstm = torch.tanh(self.linear_1(lstm_output))
+        # [batch_size, seq_len, attention_size] * [attention_size, 3] -> [batch_size, seq_len, 3]
+        label_embedding = label_embedding.cuda()
+        G = torch.matmul(atten_lstm, label_embedding.transpose(0, 1))
+        c = torch.norm(label_embedding, dim = 1)
+        v = torch.norm(lstm_output, dim = 2)
+        g = torch.matmul(v.unsqueeze(2), c.unsqueeze(0))
         G = torch.div(G, g)  # [batch_size, seq_len, 3]
 
         # to further capture the relative spatial information among consecutive words, using cnn and activate function
-        # pass
-
+        # 使用conv的结构捕获空间结构
+        # u = F.relu(self.l_conv(G.transpose(1, 2)))  # [batch_size, seq_len,  3]
         # calculate the attention weights
-        m = torch.max(G, dim = 2)
+        m = torch.max(G, dim = 2)[0]
         m = F.softmax(m, 1)
         w = m * (mask.float())
         weights = w / (w.sum(1, keepdim = True) + 1e-13)
@@ -113,7 +116,7 @@ class LSTM(nn.Module):
 
         return output, weights
 
-    def forward(self, x, mask):
+    def forward(self, x, mask, label = None):
         """
 
         :param x: batch_size, seq_len, embedding_size
@@ -132,7 +135,13 @@ class LSTM(nn.Module):
         #
         # _, idx = idx.sort(0, descending=False)
         # lstm_output = lstm_output[idx]
-        output, weights = self.attention_net(lstm_output, h_n, mask)
+        label_embedding_size = 300
+        if label is None:
+            output, weights = self.attention_net(lstm_output, h_n, mask)
+        else:
+            output, weights = self.label_attention(lstm_output, label, label_embedding_size, self.attention_size, mask)
+        # output, weights = self.attention_net(lstm_output, h_n, mask)
+
         return output, weights
 
 
