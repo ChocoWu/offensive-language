@@ -179,7 +179,7 @@ class Trainer(object):
                 word_weights, sent_weights, pred_labels, gold_labels = self.eval_use_char(dataset)
             elif self.config.use_type == 'elmo':
                 word_weights, sent_weights, pred_labels, gold_labels = self.eval_use_elmo(dataset)
-                print("word_weights:\n", word_weights)
+                # print("word_weights:\n", word_weights)
             else:
                 word_weights, sent_weights, pred_labels, gold_labels = self.eval_use_word(dataset)
 
@@ -244,6 +244,7 @@ class Trainer(object):
         pred_labels = []
         gold_labels = []
         loss_array = []
+        # print("use elmo")
         for input1, input2, labels in tqdm(dataset):
             if self.config.use_gpu:
                 input1 = input1.cuda()
@@ -253,11 +254,13 @@ class Trainer(object):
             word_mask = mask.reshape(-1, mask.size(2))
             sent_mask = mask.sum(2).ne(0).byte()
             if self.l_embedding is not None:
+                # print('label embedding')
                 label_embedding = torch.tensor(self.l_embedding, dtype = torch.float)
                 output, word_weights, sent_weights = self.model(x_word=input1, word_mask=word_mask,
                                                                 sent_mask=sent_mask, x_char=None,
                                                                 word=input2, label=label_embedding)
             else:
+                # print('no label embedding')
                 output, word_weights, sent_weights = self.model(x_word = input1, word_mask=word_mask,
                                                                 sent_mask=sent_mask, x_char = None,
                                                                 word=input2)
@@ -478,7 +481,7 @@ if __name__ == '__main__':
     parser.add_argument("--weights_file", type = str,
                         default = './checkpoint/elmo_2x4096_512_2048cnn_2xhighway_5.5B_weights.hdf5')
 
-    parser.add_argument("--use_type", type = str, default = 'word')
+    parser.add_argument("--use_type", type = str, default = 'elmo')
     parser.add_argument("--seed", type = int, default = 123, help = "seed for random")
     parser.add_argument("--batch_size", type = int, default = 15, help = "number of batch size")
     parser.add_argument("--epochs", type = int, default = 100, help = "number of epochs")
