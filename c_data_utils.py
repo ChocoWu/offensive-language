@@ -7,13 +7,10 @@
 # author shengqiong.wu
 
 import torch
-import torch.nn as nn
 from torch.utils.data import Dataset
 import pandas as pd
 import numpy as np
-# from torch.nn.utils.rnn import pad_sequence
 import string
-import data_utils
 from allennlp.modules.elmo import batch_to_ids
 
 
@@ -396,7 +393,7 @@ class Config(object):
 if __name__ == '__main__':
     config = Config()
     vocab = build_vocab(config)
-    dataset = load_data(config.train_file, config.max_sent, config.max_word, vocab)
+    dataset = load_data(config.train_file, config.max_sent, config.max_word, vocab, 'elmo')
     print('done')
 
 
