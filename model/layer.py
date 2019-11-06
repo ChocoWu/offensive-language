@@ -81,6 +81,14 @@ class LSTM(nn.Module):
 
         return new_hidden_state, weights
 
+    def pooling_net(self, lstm_out):
+        """
+        max_pooling
+        :param lstm_out:
+        :return:
+        """
+        return torch.max(lstm_out, dim = 1)
+
     def label_attention(self, lstm_output, label, label_embedding_size, attention_size, mask):
         """
 
@@ -124,6 +132,7 @@ class LSTM(nn.Module):
         :return:
             batch_size, num_directions * hidden_size
         """
+        # weights = 0
         # length = mask.sum(1)
         # sorted_length, idx = length.sort(0, descending=True)
         # x = x[idx]
@@ -138,6 +147,8 @@ class LSTM(nn.Module):
         label_embedding_size = 300
         if label is None:
             output, weights = self.attention_net(lstm_output, h_n, mask)
+            # output = self.pooling_net(lstm_output)
+
         else:
             output, weights = self.label_attention(lstm_output, label, label_embedding_size, self.attention_size, mask)
         # output, weights = self.attention_net(lstm_output, h_n, mask)
