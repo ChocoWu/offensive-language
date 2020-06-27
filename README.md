@@ -1,4 +1,4 @@
-# offensive-language
+# Aggressive Language Detection
 Aggressive language detection (ALD), detecting the abusive and offensive
 language in texts, is one the crucial applications in NLP community. Most
 existing works treat.
