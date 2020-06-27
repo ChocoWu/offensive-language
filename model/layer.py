@@ -57,29 +57,38 @@ class LSTM(nn.Module):
         score_mask_values = score_mask_value * torch.ones_like(score)
         return torch.where(mask, score, score_mask_values)
 
-    def attention_net(self, lstm_output, final_state, mask):
+    def attention_net(self, lstm_output, h, mask):
         """
-
         :param lstm_output:  batch_size, seq_len, hidden_size * num_directions
-        :param final_state: batch_size, num_layers * num_directions, hidden_size
+        :param h: batch_size, num_layers * num_directions, hidden_size
         :return:
         """
+        if self.is_directonal:
+            h = h.view(-1, self.num_layer, self.num_directions * self.hidden_size)
+            # h =  [batch_size, num_layers, num_directions * hidden_size]
+            h = h[:, h.size(1) - 1, :].unsqueeze(1)
+            # h = [batch size, 1, num_directions * hidden_size]
+            # h = self.linear_1(h)
+            # h = [batch size, 1, hidden_size]
 
-        hidden = torch.reshape(final_state, [-1, self.num_layer * self.num_directions * self.hidden_size])
-        hidden = self.linear_2(hidden)  # [batch_size, attention_size]
-        # print(hidden.size())
-        atten_lstm = torch.tanh(self.linear_1(lstm_output))  # [batch_size, seq_len, attention_size]
-        # print(atten_lstm.size())
-        # [batch_size, seq_len, attention_size] * [batch_size, attention_size, 1] -> [batch_size, seq_len, 1]
-        # -> [batch_size, seq_len]
-        atten_weights = torch.bmm(atten_lstm, hidden.unsqueeze(2)).squeeze(2)
-        soft_attn_weights = F.softmax(atten_weights, 1)  # [batch_size, seq_len]
-        w = soft_attn_weights * (mask.float())
-        weights = w / (w.sum(1, keepdim=True) + 1e-13)
+        # output = self.linear_1(lstm_output)
+        # output = [batch_size, seq_len, hidden_size]
 
-        new_hidden_state = torch.bmm(lstm_output.transpose(1, 2), weights.unsqueeze(2)).squeeze(2)
+        attn = torch.bmm(lstm_output, h.transpose(1, 2)).squeeze(2)
+        # attn = [batch_size, seq_len]
+        if mask is not None:
+            attn = attn * (mask.float())
+        attn = attn / (attn.sum(1, keepdim = True) + 1e-13)
+        # attn = [batch_size, seq_len]
+        attn = attn.unsqueeze(2)
+        # attn = [batch_size, seq_len, 1]
+        attn = attn.repeat(1, 1, self.num_directions * self.hidden_size)
+        # attn = [batch_size, seq_len, hidden_size]
 
-        return new_hidden_state, weights
+        output = torch.mul(lstm_output, attn)
+        # output = [batch_size, seq_len, hidden_size]
+
+        return output, attn[:, :, 0]
 
     def pooling_net(self, lstm_out):
         """
