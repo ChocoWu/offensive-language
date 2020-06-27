@@ -464,7 +464,6 @@ if __name__ == '__main__':
     parser.add_argument("--valid_file", type = str, default = "./data/english/agr_en_dev.csv")
     parser.add_argument("--fb_test_file", type = str, default = "./data/english/agr_en_fb_test.csv")
     parser.add_argument("--tw_test_file", type = str, default = "./data/english/agr_en_tw_test.csv")
-    # parser.add_argument("--tag_format", type = str, choices = ["bio", "bmes"], default = "bio")
 
     parser.add_argument("--save_dir", type = str, default = "./checkpoint/")
     parser.add_argument("--log_dir", type = str, default = "./log/")
