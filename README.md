@@ -1,14 +1,12 @@
 # offensive-language
 Aggressive language detection (ALD), detecting the abusive and offensive
 language in texts, is one the crucial applications in NLP community. Most
-existing works treat
+existing works treat.
 
 # Dataset
-The [TRAC](https://sites.google.com/view/trac1/home) dataset is published in a shared task for aggressive language detection. The
-sources are from English social media, e.g., Facebook and Twitter, and there are two
-corresponding testing sets, i.e., FB and TW. There are three labels for indicating the aggression
-degree: covertly aggressive(CAG), non-aggressive(NAG) and overtly aggressive(
-OAG)
+The [TRAC](https://sites.google.com/view/trac1/home) dataset is published in a shared task for aggressive language detection. 
+The sources are from English social media, e.g., Facebook and Twitter, and there are two corresponding testing sets, i.e., FB and TW. 
+There are three labels for indicating the aggression degree: covertly aggressive(CAG), non-aggressive(NAG) and overtly aggressive(OAG).
 <div class="datagrid" style="width:500px;">
 <table>
 <thead><tr><th>Dataset</th><th>CAG</th><th>OAG</th><th>NAG</th><th>Total</th></tr></thead>
@@ -25,9 +23,28 @@ OAG)
 python 3.6 with pip, pytorch==1.1
 
 # Quick start
-## data pre-process
+## Preprocessing
 If we want to use hierarchical neural network to train our model, we should pre-process the dataset. 
 To pre-process the data run:
 ```angular2html
 python data_processor/util.py
 ```
+
+## Training
+To train the model run:
+```angular2html
+python train_with_elmo.py [--args==value]
+```
+Some of these args include:
+```angular2html
+--use_type                : word embedding type [char+word, only word, elmo+word]
+--patience                : early stop
+--freeze                  : epochs that embedding matrix not update
+--triplet                 : whether to use troplet loss, default False
+```
+For more details, refer to the code
+
+# References
+* [Triplet loss](https://github.com/adambielski/siamese-triplet)
+* [Hierarchical](https://www.aclweb.org/anthology/N16-1174.pdf)
+* [Joint embedding for word and label](https://arxiv.org/abs/1805.04174)
